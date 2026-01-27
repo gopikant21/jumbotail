@@ -109,10 +109,13 @@ class SearchService {
       .slice(searchQuery.offset, searchQuery.offset + searchQuery.limit)
       .map((product) => {
         // Check if product has toSearchResult method (Product instance)
-        if (typeof product.toSearchResult === 'function') {
-          return product.toSearchResult(searchQuery.query, product.relevanceScore);
+        if (typeof product.toSearchResult === "function") {
+          return product.toSearchResult(
+            searchQuery.query,
+            product.relevanceScore,
+          );
         }
-        
+
         // Fallback for plain objects - create search result manually
         return {
           productId: product.productId,
@@ -120,18 +123,25 @@ class SearchService {
           description: product.description,
           price: product.price,
           mrp: product.mrp,
-          currency: product.currency || 'INR',
-          discount: product.mrp ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0,
+          currency: product.currency || "INR",
+          discount: product.mrp
+            ? Math.round(((product.mrp - product.price) / product.mrp) * 100)
+            : 0,
           rating: product.rating,
           ratingCount: product.ratingCount,
           stock: product.stock,
-          stockStatus: product.stock === 0 ? 'OUT_OF_STOCK' : product.stock <= 10 ? 'LOW_STOCK' : 'HIGH_STOCK',
+          stockStatus:
+            product.stock === 0
+              ? "OUT_OF_STOCK"
+              : product.stock <= 10
+                ? "LOW_STOCK"
+                : "HIGH_STOCK",
           brand: product.brand,
           category: product.category,
           imageUrls: (product.imageUrls || []).slice(0, 3),
           metadata: product.metadata || {},
           relevanceScore: Math.round((product.relevanceScore || 0) * 100) / 100,
-          tags: product.tags || []
+          tags: product.tags || [],
         };
       });
 
@@ -479,25 +489,50 @@ class SearchService {
    * Get search suggestions for autocomplete
    */
   async getSuggestions(partialQuery, limit = 10) {
-    const suggestions = [];
+    const suggestions = new Map();
     const searchTerms = partialQuery.toLowerCase().split(/\s+/);
     const lastTerm = searchTerms[searchTerms.length - 1];
 
-    // Get suggestions from search index
-    for (const [term, productIds] of this.searchIndex.entries()) {
-      if (term.startsWith(lastTerm) && productIds.size > 0) {
-        suggestions.push({
-          suggestion: term,
-          count: productIds.size,
-        });
+    // If the last term is too short, don't provide suggestions
+    if (lastTerm.length < 2) {
+      return [];
+    }
+
+    // Get all products from repository
+    const products = Array.from(this.productRepository.products.values());
+
+    // Extract suggestions from product titles, brands, and categories
+    for (const product of products) {
+      const searchableFields = [
+        product.title,
+        product.brand,
+        product.category,
+        ...(product.tags || []),
+        ...(product.searchableText?.split(" ") || []),
+      ];
+
+      for (const field of searchableFields) {
+        if (!field) continue;
+
+        const words = field.toLowerCase().split(/\s+/);
+        for (const word of words) {
+          // Check if word starts with the partial query
+          if (word.startsWith(lastTerm) && word.length >= lastTerm.length) {
+            const existing = suggestions.get(word);
+            suggestions.set(word, (existing || 0) + 1);
+          }
+        }
       }
     }
 
-    // Sort by popularity and return top suggestions
-    return suggestions
+    // Convert to array and sort by popularity
+    const suggestionArray = Array.from(suggestions.entries())
+      .map(([suggestion, count]) => ({ suggestion, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, limit)
       .map((s) => s.suggestion);
+
+    return suggestionArray;
   }
 
   /**
